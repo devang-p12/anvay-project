@@ -1,0 +1,59 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  spark-master:
+    build:
+      context: .
+      dockerfile: spark.Dockerfile
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    volumes:
+      - .:/opt/spark/work-dir
+      - ${USERPROFILE}/.cache/huggingface:/home/spark/.cache/huggingface
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: spark.Dockerfile
+    depends_on:
+      - spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    volumes:
+      - .:/opt/spark/work-dir
+      - ${USERPROFILE}/.cache/huggingface:/home/spark/.cache/huggingface
+
+  neo4j:
+    image: neo4j:5.15.0
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - ./neo4j/data:/data
+      - ./neo4j/logs:/logs
+    environment:
+      NEO4J_AUTH: neo4j/Devang@0305
+      NEO4J_PLUGINS: '["apoc"]'
+      # APOC configuration if needed in newer versions
+      # NEO4J_dbms_security_procedures_unrestricted: apoc.*

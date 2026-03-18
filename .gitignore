@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Neo4j
+neo4j/data/
+neo4j/logs/
+
+# Spark
+checkpoints/
+spark-warehouse/
+metastore_db/
+derby.log
+eventLog/
+
+# AI Models & Cache
+.cache/
+.huggingface/
+#sarvamai/  # Uncomment if model is downloaded directly into project
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+setup_check.py
+*.log

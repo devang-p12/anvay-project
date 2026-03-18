@@ -1,0 +1,9 @@
+pyspark
+kafka-python
+tqdm
+python-dotenv
+neo4j
+transformers
+torch
+accelerate
+sentencepiece
