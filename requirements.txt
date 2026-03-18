@@ -7,3 +7,13 @@ transformers
 torch
 accelerate
 sentencepiece
+llama-index
+llama-index-graph-stores-neo4j
+llama-index-llms-huggingface
+langchain
+langchain-community
+
+# Phase 3: Master Integration
+fastapi
+uvicorn
+langchain-core

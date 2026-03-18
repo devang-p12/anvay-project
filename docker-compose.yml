@@ -57,3 +57,15 @@ services:
       NEO4J_PLUGINS: '["apoc"]'
       # APOC configuration if needed in newer versions
       # NEO4J_dbms_security_procedures_unrestricted: apoc.*
+
+  inference-server:
+    build:
+      context: .
+      dockerfile: inference.Dockerfile
+    ports:
+      - "8000:11434" # Expose Ollama API mapped to 8000
+    volumes:
+      - anvay-models:/root/.ollama
+
+volumes:
+  anvay-models:

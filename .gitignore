@@ -53,3 +53,7 @@ eventLog/
 # Project specific
 setup_check.py
 *.log
+threat_matrix.json
+data/ingested_data.json
+C:\Users\patil\.gemini\antigravity\brain\**
+*.webp
