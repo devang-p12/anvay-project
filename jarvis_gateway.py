@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from typing import Literal
 import json
 import os
+import re
 
 # Import the existing Intelligence Engine built in Phase 2
 from intelligence_core import setup_langchain_agent, NEO4J_URI, NEO4J_USER, NEO4J_PASS
@@ -31,8 +33,14 @@ except Exception as e:
     retriever_tool = None
 
 # Pydantic Schemas
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str
+
 class QueryRequest(BaseModel):
     query: str
+    messages: list[ChatMessage] = []
+    mode: Literal["general", "graph_heavy"] = "general"
     include_graph: bool = False
     hops: int = Field(default=3, ge=1, le=5)
     limit: int = Field(default=25, ge=1, le=100)
@@ -117,7 +125,7 @@ async def get_intelligence(request: QueryRequest):
         import time
         start_time = time.time()
         
-        # 2. Graph Retrieval Path
+        # 2. Graph Retrieval Path (optional context, not a hard gate)
         if not retriever_tool:
             print("[JARVIS Gateway] WARNING: Retriever tool is not initialized.")
             return {"synthesis": "Retriever Offline", "graph_paths": "No data retrieved."}
@@ -126,37 +134,72 @@ async def get_intelligence(request: QueryRequest):
         context = retriever_tool.run(target)
         retrieval_time = time.time() - start_time
         print(f"[JARVIS Gateway] Retrieval completed in {retrieval_time:.2f}s.")
-        
-        if not context:
-            print(f"[JARVIS Gateway] WARNING: No graph data found for target '{target}'. Returning early.")
-            return {
-                "query": request.query,
-                "extracted_entities": [target],
-                "graph_paths": "",
-                "synthesis": f"No intelligence data was found in the graph database for **'{target}'**. The entity may not have been ingested yet, or the search term may need to be more specific (e.g., try 'India' instead of 'Indian foreign policy')."
-            }
-        
-        # 3. Ask the LLM to answer conversationally using the graph context
+
+        # 3. Ask the LLM to answer conversationally (Sarvam), with graph as optional evidence
+        context = context or ""
         cards = [c.strip() for c in context.strip().split("\n\n---\n\n") if c.strip()]
 
-        prompt = f"""
-You are ANVAY, a strategic intelligence assistant.
+        # Keep only the latest few turns to stay fast
+        history = request.messages[-10:] if request.messages else []
+        history_text = "\n".join(f"{m.role.upper()}: {m.content}" for m in history if m.content.strip())
 
-The user has asked:
+        # Build a structured evidence list from the cards so the model can cite them reliably.
+        evidence = []
+        for idx, card in enumerate(cards, 1):
+            src = ""
+            url = ""
+            date = ""
+            m_src = re.search(r"SOURCE:\s*(.*?)\s*\|\s*DATE:", card)
+            if m_src:
+                src = m_src.group(1).strip()
+            m_date = re.search(r"DATE:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8,14}|Unknown)", card)
+            if m_date:
+                date = m_date.group(1).strip()
+            m_url = re.search(r"URL:\s*(\S+)", card)
+            if m_url:
+                url = m_url.group(1).strip()
+
+            evidence.append(
+                {
+                    "id": idx,
+                    "source": src,
+                    "date": date,
+                    "url": url,
+                    "card": card,
+                }
+            )
+
+        if request.mode == "graph_heavy":
+            grounding_instruction = (
+                "- You MUST answer using ONLY the EVIDENCE items below.\n"
+                "- If the evidence does not contain enough information to answer, say exactly what is missing.\n"
+                "- Do NOT use general world knowledge.\n"
+                "- Every factual claim must include citations like [1], [2] referencing EVIDENCE ids.\n"
+                "- End with a short 'Sources' list containing the cited URLs.\n"
+            )
+        else:
+            grounding_instruction = (
+                "- Answer broadly using your own knowledge.\n"
+                "- Use evidence when it adds concrete details; cite it as [id] when used.\n"
+            )
+
+        prompt = f"""
+SYSTEM:
+You are ANVAY — a professional analyst running locally.
+
+CONVERSATION:
+{history_text or "No prior turns."}
+
+USER QUESTION:
 \"\"\"{request.query}\"\"\"
 
-You have access to structured intelligence cards from an ontology-backed Neo4j graph.
-Each card describes one finding (articles, economic indicators, weather alerts, etc.).
+EVIDENCE (Neo4j-derived; may be empty):
+{json.dumps(evidence, ensure_ascii=False)[:14000]}
 
-INTELLIGENCE CARDS:
-\"\"\"{context}\"\"\"
-
-Instructions:
-- Answer in a natural, concise way like a professional analyst.
-- Synthesize across the cards instead of listing them verbatim.
-- Be explicit when something is uncertain or missing from the graph.
-- If relevant, refer to patterns over time or entities, but do NOT invent facts that are not supported.
-- Use short paragraphs and, when helpful, bullet points.
+INSTRUCTIONS:
+{grounding_instruction}
+- Write a clear, GPT-style answer: short paragraphs, optional bullets, no raw dumps.
+- If evidence is empty, say: "I don't have relevant entries in the graph to answer this." and suggest what entity/timeframe to ingest/query.
 """
 
         try:
@@ -170,7 +213,7 @@ Instructions:
                 formatted_cards += f"\n### Finding {i}\n```\n{card}\n```\n"
             synthesis_text = formatted_cards or "Intelligence retrieved, but no readable synthesis is available."
         
-        print(f"[JARVIS Gateway] Report generated for '{target}' ({len(cards)} findings).")
+        print(f"[JARVIS Gateway] Response generated for '{target}' ({len(cards)} graph findings).")
 
         graph_payload = None
         if request.include_graph:
@@ -242,12 +285,21 @@ Instructions:
             graph_time = time.time() - graph_start
             print(f"[JARVIS Gateway] Graph payload built in {graph_time:.2f}s.")
         
+        # Build a minimal sources list the UI can render.
+        cited_ids = set(int(x) for x in re.findall(r"\[(\d+)\]", str(synthesis_text)) if x.isdigit())
+        sources = [
+            {"id": e["id"], "source": e.get("source", ""), "date": e.get("date", ""), "url": e.get("url", "")}
+            for e in evidence
+            if e["id"] in cited_ids and e.get("url")
+        ]
+
         return {
             "query": request.query,
             "extracted_entities": [target],
             "graph_paths": context,
             "synthesis": synthesis_text,
             "graph": graph_payload,
+            "sources": sources,
         }
     except Exception as e:
         import traceback

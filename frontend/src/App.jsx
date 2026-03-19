@@ -75,6 +75,7 @@ const JarvisTerminal = () => {
   const [messages, setMessages] = useState([{ type: 'bot', text: 'System initialized. Sovereign Inference Layer operational. Awaiting strategic query.' }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState('general'); // general | graph_heavy
   const scrollRef = useRef();
 
   useEffect(() => {
@@ -84,11 +85,19 @@ const JarvisTerminal = () => {
   const handleSend = async () => {
     if (!input.trim() || loading) return;
     const userQuery = input;
-    setMessages(prev => [...prev, { type: 'user', text: userQuery }]);
+    const nextMessages = [...messages, { type: 'user', text: userQuery }];
+    setMessages(nextMessages);
     setInput('');
     setLoading(true);
 
-    const result = await postIntelligence(userQuery);
+    const wireMessages = nextMessages
+      .slice(-10)
+      .map((m) => ({
+        role: m.type === 'user' ? 'user' : 'assistant',
+        content: m.text,
+      }));
+
+    const result = await postIntelligence({ query: userQuery, messages: wireMessages, mode });
     
     setMessages(prev => [...prev, { 
       type: 'bot', 
@@ -101,7 +110,19 @@ const JarvisTerminal = () => {
   return (
     <div className="glass-panel" style={{ gridRow: '2' }}>
       <div className="panel-header">
-        <div className="panel-title">JARVIS Reasoning Hub</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="panel-title">JARVIS Reasoning Hub</div>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+            className="input"
+            style={{ width: '170px', padding: '8px 10px', borderRadius: '10px' }}
+            aria-label="Chat mode"
+          >
+            <option value="general">General Chat</option>
+            <option value="graph_heavy">Graph-Heavy</option>
+          </select>
+        </div>
         <MessageSquare size={16} color="var(--primary)" />
       </div>
       <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>

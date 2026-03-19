@@ -12,9 +12,9 @@ export const getAlerts = async () => {
   }
 };
 
-export const postIntelligence = async (query) => {
+export const postIntelligence = async ({ query, messages = [], mode = 'general' }) => {
   try {
-    const response = await axios.post(`${API_BASE}/intelligence`, { query });
+    const response = await axios.post(`${API_BASE}/intelligence`, { query, messages, mode });
     return response.data;
   } catch (error) {
     console.error("Error querying JARVIS:", error);
