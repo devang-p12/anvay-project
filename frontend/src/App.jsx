@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Radio, MessageSquare, Map as MapIcon, Send, Loader2 } from 'lucide-react';
+import { Radio, Map as MapIcon, Send, Loader2, Sparkles, Activity, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAlerts, postIntelligence } from './api';
 import './index.css';
@@ -7,223 +7,159 @@ import './index.css';
 // --- Sub-Components ---
 
 const ThreatMatrix = ({ alerts }) => (
-  <motion.div 
-    initial={{ opacity: 0, x: -20 }}
-    animate={{ opacity: 1, x: 0 }}
-    className="glass-panel" 
-    style={{ gridRow: '2' }}
-  >
-    <div className="panel-header">
-      <div className="panel-title">Threat Matrix</div>
-      <Radio className="pulse" size={16} color="var(--warning)" />
+  <div className="widget-card">
+    <div className="widget-title">
+      <Activity size={14} />
+      Threat Matrix
     </div>
-    <div style={{ padding: '15px', overflowY: 'auto', flex: 1 }}>
-      <AnimatePresence mode="popLayout">
-        {alerts.length === 0 ? (
-          <div className="faint" style={{ textAlign: 'center', marginTop: '40px', fontSize: '0.85rem' }}>Monitoring for anomalies...</div>
-        ) : (
-          alerts.map((alert, i) => (
-            <motion.div 
-              key={i}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              style={{ 
-                marginBottom: '15px', 
-                padding: '12px', 
-                background: alert.severity === 'CRITICAL' ? 'var(--danger-weak)' : 'var(--warning-weak)', 
-                borderLeft: `3px solid ${alert.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)'}`, 
-                borderRadius: '10px',
-                border: '1px solid var(--border)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', marginBottom: '5px' }}>
-                <span style={{ color: alert.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)', fontWeight: 800, letterSpacing: '0.06em' }}>{alert.severity}</span>
-                <span className="faint">{new Date(alert.timestamp * 1000).toLocaleTimeString()}</span>
-              </div>
-              <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{alert.source_entity} &rarr; {alert.target_entity}</div>
-              <div className="muted" style={{ fontSize: '0.8rem', marginTop: '4px' }}>{alert.description}</div>
-            </motion.div>
-          ))
-        )}
-      </AnimatePresence>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {alerts.length === 0 ? (
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-faint)', textAlign: 'center', py: 4 }}>Monitoring vault...</div>
+      ) : (
+        alerts.slice(0, 5).map((alert, i) => (
+          <div key={i} style={{ 
+            fontSize: '0.8rem', 
+            padding: '10px', 
+            background: 'var(--surface-muted)', 
+            borderRadius: '10px',
+            borderLeft: `3px solid ${alert.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)'}`
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: '2px' }}>{alert.source_entity}</div>
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{alert.description}</div>
+          </div>
+        ))
+      )}
     </div>
-  </motion.div>
+  </div>
 );
 
 const StratMap = () => (
-  <motion.div 
-    initial={{ opacity: 0, y: 20 }}
-    animate={{ opacity: 1, y: 0 }}
-    className="glass-panel" 
-    style={{ gridRow: '2' }}
-  >
-    <div className="panel-header">
-      <div className="panel-title">Geospatial Intelligence</div>
-      <MapIcon size={16} color="var(--primary)" />
+  <div className="widget-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+    <div className="widget-title">
+      <Globe size={14} />
+      Geospatial
     </div>
-    <div style={{ flex: 1, position: 'relative', background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)' }}>
-       <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
-          <div className="pulse" style={{ color: 'var(--primary)', fontSize: '0.9rem', fontWeight: 700, letterSpacing: '0.10em' }}>INITIALIZING MAP…</div>
-          <div className="faint" style={{ fontSize: '0.75rem', marginTop: '8px' }}>Awaiting coordinates from ingested reports</div>
-       </div>
+    <div style={{ flex: 1, background: '#f3f4f6', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '150px' }}>
+      <div style={{ textAlign: 'center' }}>
+        <MapIcon size={24} color="#9ca3af" />
+        <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: '8px', fontWeight: 600 }}>MAP_CORE_IDLE</div>
+      </div>
     </div>
-  </motion.div>
+  </div>
 );
-
-const JarvisTerminal = () => {
-  const [messages, setMessages] = useState([{ type: 'bot', text: 'System initialized. Sovereign Inference Layer operational. Awaiting strategic query.' }]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState('general'); // general | graph_heavy
-  const scrollRef = useRef();
-
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!input.trim() || loading) return;
-    const userQuery = input;
-    const nextMessages = [...messages, { type: 'user', text: userQuery }];
-    setMessages(nextMessages);
-    setInput('');
-    setLoading(true);
-
-    const wireMessages = nextMessages
-      .slice(-10)
-      .map((m) => ({
-        role: m.type === 'user' ? 'user' : 'assistant',
-        content: m.text,
-      }));
-
-    const result = await postIntelligence({ query: userQuery, messages: wireMessages, mode });
-    
-    setMessages(prev => [...prev, { 
-      type: 'bot', 
-      text: result.synthesis,
-      data: result.graph_paths
-    }]);
-    setLoading(false);
-  };
-
-  return (
-    <div className="glass-panel" style={{ gridRow: '2' }}>
-      <div className="panel-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div className="panel-title">JARVIS Reasoning Hub</div>
-          <select
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-            className="input"
-            style={{ width: '170px', padding: '8px 10px', borderRadius: '10px' }}
-            aria-label="Chat mode"
-          >
-            <option value="general">General Chat</option>
-            <option value="graph_heavy">Graph-Heavy</option>
-          </select>
-        </div>
-        <MessageSquare size={16} color="var(--primary)" />
-      </div>
-      <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
-            {messages.map((m, i) => (
-              <div key={i} style={{ 
-                alignSelf: m.type === 'user' ? 'flex-end' : 'flex-start',
-              }}>
-                <div className={`message ${m.type === 'user' ? 'message-user' : ''}`}>
-                <div className={`message-label ${m.type === 'user' ? 'message-label-user' : 'message-label-bot'}`}>
-                  {m.type === 'user' ? 'You' : 'JARVIS'}
-                </div>
-                <div className={m.type === 'bot' ? 'mono' : ''} style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
-                </div>
-              </div>
-            ))}
-            {loading && (
-              <div className="muted" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
-                <Loader2 size={16} className="animate-spin" />
-                <span>Reasoning over graph...</span>
-              </div>
-            )}
-        </div>
-        <div style={{ position: 'relative' }}>
-           <input 
-              type="text" 
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="Query the Intelligence Graph..." 
-              className="input"
-           />
-           <div 
-              onClick={handleSend}
-              className="btn-icon"
-              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', opacity: input.trim() ? 1 : 0.4 }}
-           >
-              <Send size={18} color="var(--primary)" />
-           </div>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 // --- Main App ---
 
 function App() {
-  const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const [messages, setMessages] = useState([{ type: 'bot', text: 'System initialized. Sovereign Inference Layer operational. Awaiting strategic query.' }]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
   const [alerts, setAlerts] = useState([]);
+  const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const scrollRef = useRef();
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
-    
-    // Poll alerts every 10 seconds
     const fetchLoop = async () => {
       const data = await getAlerts();
       if (data.active_threats) setAlerts(data.active_threats);
     };
     fetchLoop();
     const alertTimer = setInterval(fetchLoop, 10000);
-
-    return () => {
-      clearInterval(timer);
-      clearInterval(alertTimer);
-    };
+    return () => { clearInterval(timer); clearInterval(alertTimer); };
   }, []);
 
-  return (
-    <div className="dashboard-container">
-      <nav className="navbar">
-        <div className="logo-section">
-          <div className="logo-icon">A</div>
-          <div>
-            <div style={{ fontWeight: 800, letterSpacing: '0.08em', fontSize: '1.05rem' }}>ANVAY AI</div>
-            <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Ontology Intelligence Engine</div>
-          </div>
-        </div>
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [messages]);
 
-        <div className="nav-status">
-          <div className="status-item chip">
-             <div className="status-dot"></div>
-             KAFKA VAULT: ACTIVE
-          </div>
-          <div className="status-item chip">
-             <div className="status-dot"></div>
-             NEO4J: SYNCED
-          </div>
-          <div className="status-item chip">
-             <div className="status-dot"></div>
-             LLM: OPTIMIZED
-          </div>
-          <div className="status-item chip">
-             <span className="mono">{time}</span>
-          </div>
+  const handleSend = async () => {
+    if (!input.trim() || loading) return;
+    const userQuery = input;
+    setMessages(prev => [...prev, { type: 'user', text: userQuery }]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const result = await postIntelligence({ 
+        query: userQuery, 
+        messages: messages.slice(-5).map(m => ({ role: m.type === 'user' ? 'user' : 'assistant', content: m.text })) 
+      });
+      setMessages(prev => [...prev, { type: 'bot', text: result.synthesis }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { type: 'bot', text: 'Error: Connection lost. Re-establishing link...' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="app-container">
+      <nav className="nav-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '32px', height: '32px', background: 'var(--primary)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800 }}>A</div>
+          <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>ANVAY AI <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>/ JARVIS</span></div>
+        </div>
+        <div style={{ display: 'flex', gap: '16px', fontSize: '0.8rem', fontWeight: 600 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: 6, height: 6, background: '#10b981', borderRadius: '50%' }}></div>VAULT</div>
+          <div className="mono">{time}</div>
         </div>
       </nav>
 
-      <ThreatMatrix alerts={alerts} />
-      <StratMap />
-      <JarvisTerminal />
+      <div className="main-layout">
+        <div className="chat-container" ref={scrollRef}>
+          <div className="chat-content">
+            {messages.map((m, i) => (
+              <div key={i} className={m.type === 'user' ? 'message-user' : 'message-bot'}>
+                {m.type === 'bot' && (
+                  <div className="bot-avatar">
+                    <Sparkles size={16} />
+                  </div>
+                )}
+                <div className="bot-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {m.text}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="message-bot">
+                <div className="bot-avatar"><Loader2 size={16} className="animate-spin" /></div>
+                <div className="bot-text" style={{ color: 'var(--text-faint)' }}>Reasoning over ontology...</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <aside className="intelligence-sidebar">
+          <ThreatMatrix alerts={alerts} />
+          <StratMap />
+          <div style={{ marginTop: 'auto', padding: '10px', fontSize: '0.7rem', color: 'var(--text-faint)', textAlign: 'center', borderTop: '1px solid var(--border)' }}>
+            SOVEREIGN INTELLIGENCE PROTOCOL V2.5
+          </div>
+        </aside>
+      </div>
+
+      <div className="input-container">
+        <div className="input-box">
+          <input 
+            type="text" 
+            className="prompt-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+            placeholder="Ask JARVIS anything..."
+          />
+          <button 
+            className="send-btn" 
+            onClick={handleSend}
+            disabled={!input.trim() || loading}
+          >
+            <Send size={18} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

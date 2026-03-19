@@ -1,6 +1,8 @@
 import os
 import json
 from dotenv import load_dotenv
+from scraper_core import ScraperCore
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -59,6 +61,57 @@ class IntelligenceCore:
             )
         except Exception as e:
             print(f"Graph store init error: {e}")
+        self.scraper = ScraperCore()
+
+    async def fetch_deep_context(self, target: str, hops: int = 3, max_articles: int = 3) -> str:
+        """
+        Orchestrates the Phase 5 Deep RAG pipeline.
+        Now fully async to play nice with FastAPI.
+        """
+        print(f"\n[Intelligence Core] Initiating Deep RAG for: '{target}'")
+        
+        # We reuse the logic from subgraph_retriever but return raw data
+        from neo4j import GraphDatabase
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+        
+        urls = []
+        meta_context = ""
+        
+        with driver.session() as session:
+            try:
+                # Optimized query for deep URLs
+                query = f"""
+                MATCH (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|MEASURED_IN|THREATENS*1..{hops}]-(n)
+                WHERE (e:Person OR e:Organization OR e:Location OR e:Theme)
+                  AND toLower(e.name) CONTAINS toLower($target)
+                  AND (n:Article OR n:EconomicIndicator OR n:WeatherAlert)
+                RETURN DISTINCT n.url as url, n.title as title, labels(n)[0] as type
+                LIMIT {max_articles}
+                """
+                records = list(session.run(query, target=target))
+                urls = [r["url"] for r in records if r["url"]]
+                
+                # Pre-fetch some metadata for the prompt
+                meta_context = "\n".join([f"- {r['type']}: {r['title']} ({r['url']})" for r in records])
+                
+            except Exception as e:
+                print(f"[Intelligence Core] Graph Error: {e}")
+            finally:
+                driver.close()
+
+        if not urls:
+            return "NO_DEEP_CONTEXT_FOUND"
+
+        # Parallel Scraping
+        print(f"[Intelligence Core] Scraper: Fetching {len(urls)} articles...")
+        scraped_data = await self.scraper.scrape_batch(urls)
+
+        # Combine into a Reasoning block
+        full_context = "### STRATEGIC ARTICLE CONTENT STORE\n\n"
+        for url, text in scraped_data.items():
+            full_context += f"SOURCE URL: {url}\nCONTENT:\n{text[:5000]}\n\n---\n\n"
+            
+        return full_context
 
     def subgraph_retriever(self, entity_name: str, hops: int = 3) -> str:
         """
@@ -232,6 +285,12 @@ def setup_langchain_agent():
         name="Neo4j_Subgraph_Retriever",
         func=lambda q: core.subgraph_retriever(q, hops=3),
         description="Retrieves multi-hop context from the Neo4j graph."
+    )
+    
+    deep_retriever_tool = Tool(
+        name="Neo4j_Deep_Retriever",
+        func=lambda q: core.fetch_deep_context(q, hops=3),
+        description="Scrapes full-text content of articles related to the entity."
     )
     
     try:

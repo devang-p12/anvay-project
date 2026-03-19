@@ -93,6 +93,12 @@ async def graph_health():
             "core_labels": node_counts["labels"] if node_counts else [],
         }
     except Exception as e:
+        llm = ChatOpenAI(
+            model="llama3",
+            openai_api_key="none",
+            base_url="http://localhost:11434/v1",
+            timeout=120,
+        )
         return {
             "status": "degraded",
             "neo4j_uri": NEO4J_URI,
@@ -110,10 +116,10 @@ async def get_intelligence(request: QueryRequest):
     try:
         # 1. Advanced Extractor: preserve original casing for Neo4j CONTAINS match
         stop_words = {"about", "tell", "show", "what", "where", "info", "information", "something", "on", "the", "know"}
-        # Keep original-cased words but filter by lowercase stop-words
         original_words = request.query.replace("?", "").split()
         filtered_words = [w for w in original_words if len(w) > 3 and w.lower() not in stop_words]
         
+        # We try the most specific target first, but allow falling back in the retrieval logs
         if len(filtered_words) >= 2:
             target = " ".join(filtered_words[-2:])  # e.g. "United States"
         elif filtered_words:
@@ -125,95 +131,83 @@ async def get_intelligence(request: QueryRequest):
         import time
         start_time = time.time()
         
-        # 2. Graph Retrieval Path (optional context, not a hard gate)
+        # 2. Graph Retrieval Path (Parallel: Cards + Deep Text)
         if not retriever_tool:
             print("[JARVIS Gateway] WARNING: Retriever tool is not initialized.")
             return {"synthesis": "Retriever Offline", "graph_paths": "No data retrieved."}
             
         print(f"[JARVIS Gateway] Fetching sub-graph context for target: '{target}'...")
-        context = retriever_tool.run(target)
+        # Standard Cards for UI Display
+        context_cards = retriever_tool.run(target)
+        
+        # Fallback Logic: If no cards found for compound target, try the last word (likely the main entity)
+        if not context_cards and " " in target:
+            fallback_target = target.split()[-1]
+            print(f"[JARVIS Gateway] No data for compound '{target}'. Falling back to anchor: '{fallback_target}'...")
+            target = fallback_target
+            context_cards = retriever_tool.run(target)
+
+        # Deep Research Context for LLM Synthesis (Reduced to 1 article for speed on local GPU)
+        print(f"[JARVIS Gateway] Initiating Deep Scraper for context enrichment for: '{target}'...")
+        from intelligence_core import IntelligenceCore
+        core_instance = IntelligenceCore()
+        deep_context = await core_instance.fetch_deep_context(target, max_articles=1)
+        
+        # Guard: Truncate deep context to prevent LLM overflow/timeout
+        if len(deep_context) > 5000:
+            deep_context = deep_context[:5000] + "... [TRUNCATED FOR SPEED] ..."
+        
         retrieval_time = time.time() - start_time
-        print(f"[JARVIS Gateway] Retrieval completed in {retrieval_time:.2f}s.")
+        print(f"[JARVIS Gateway] Total Retrieval + Scraping completed in {retrieval_time:.2f}s.")
 
-        # 3. Ask the LLM to answer conversationally (Sarvam), with graph as optional evidence
-        context = context or ""
-        cards = [c.strip() for c in context.strip().split("\n\n---\n\n") if c.strip()]
-
-        # Keep only the latest few turns to stay fast
-        history = request.messages[-10:] if request.messages else []
-        history_text = "\n".join(f"{m.role.upper()}: {m.content}" for m in history if m.content.strip())
-
-        # Build a structured evidence list from the cards so the model can cite them reliably.
+        # 3. Sovereign Inference Synthesis (Deep RAG)
+        cards = [c.strip() for c in (context_cards or "").strip().split("\n\n---\n\n") if c.strip()]
+        
+        # Build evidence for sources return
         evidence = []
         for idx, card in enumerate(cards, 1):
-            src = ""
-            url = ""
-            date = ""
-            m_src = re.search(r"SOURCE:\s*(.*?)\s*\|\s*DATE:", card)
-            if m_src:
-                src = m_src.group(1).strip()
-            m_date = re.search(r"DATE:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8,14}|Unknown)", card)
-            if m_date:
-                date = m_date.group(1).strip()
             m_url = re.search(r"URL:\s*(\S+)", card)
-            if m_url:
-                url = m_url.group(1).strip()
+            evidence.append({"id": idx, "url": m_url.group(1) if m_url else "", "card": card})
+        
+        sources = {str(e["id"]): e["url"] for e in evidence}
 
-            evidence.append(
-                {
-                    "id": idx,
-                    "source": src,
-                    "date": date,
-                    "url": url,
-                    "card": card,
-                }
-            )
+        # Context Density Management: Limit LLM metadata to top 5 cards to prevent timeouts
+        prompt_cards = "\n\n---\n\n".join(cards[:5])
+        if len(cards) > 5:
+            prompt_cards += f"\n\n... [TRUNCATED {len(cards)-5} ADDITIONAL FINDINGS] ..."
 
-        if request.mode == "graph_heavy":
-            grounding_instruction = (
-                "- You MUST answer using ONLY the EVIDENCE items below.\n"
-                "- If the evidence does not contain enough information to answer, say exactly what is missing.\n"
-                "- Do NOT use general world knowledge.\n"
-                "- Every factual claim must include citations like [1], [2] referencing EVIDENCE ids.\n"
-                "- End with a short 'Sources' list containing the cited URLs.\n"
-            )
-        else:
-            grounding_instruction = (
-                "- Answer broadly using your own knowledge.\n"
-                "- Use evidence when it adds concrete details; cite it as [id] when used.\n"
-            )
+        # Build prompt with Deep Context
+        prompt = f"""### SOVEREIGN INTELLIGENCE PROTOCOL
+Role: JARVIS (Anvay Project Reasoning Core)
+Task: Synthesize a professional report based on the provided <deep_intel> and <graph_metadata>.
 
-        prompt = f"""
-SYSTEM:
-You are ANVAY — a professional analyst running locally.
+<deep_intel>
+{deep_context if deep_context != "NO_DEEP_CONTEXT_FOUND" else "No deep full-text available for this entity."}
+</deep_intel>
 
-CONVERSATION:
-{history_text or "No prior turns."}
+<graph_metadata>
+{prompt_cards}
+</graph_metadata>
 
-USER QUESTION:
-\"\"\"{request.query}\"\"\"
-
-EVIDENCE (Neo4j-derived; may be empty):
-{json.dumps(evidence, ensure_ascii=False)[:14000]}
+<user_query>
+{request.query}
+</user_query>
 
 INSTRUCTIONS:
-{grounding_instruction}
-- Write a clear, GPT-style answer: short paragraphs, optional bullets, no raw dumps.
-- If evidence is empty, say: "I don't have relevant entries in the graph to answer this." and suggest what entity/timeframe to ingest/query.
-"""
+1. Use the <deep_intel> (full article text) to provide specific details, quotes, and reasoning.
+2. If facts conflict, prioritize the most recent date.
+3. Every factual claim MUST include a citation like [1], [2] referencing the source IDs from <graph_metadata>.
+4. Maintain a formal, strategic, and sovereign tone.
 
+STRATEGIC REPORT:"""
         try:
             llm_response = llm.invoke(prompt)
-            # ChatOpenAI returns an object with .content; mock may just be a string
             synthesis_text = getattr(llm_response, "content", llm_response)
         except Exception as e:
-            print(f"[JARVIS Gateway] LLM synthesis failed, falling back to raw cards: {e}")
-            formatted_cards = ""
-            for i, card in enumerate(cards, 1):
-                formatted_cards += f"\n### Finding {i}\n```\n{card}\n```\n"
-            synthesis_text = formatted_cards or "Intelligence retrieved, but no readable synthesis is available."
+            print(f"[JARVIS Gateway] LLM synthesis failed: {e}")
+            synthesis_text = f"### [SYSTEM ADVISORY]: DEEP SYNTHESIS DEGRADED\nReason: {e}\n\n{context_cards}"
         
-        print(f"[JARVIS Gateway] Response generated for '{target}' ({len(cards)} graph findings).")
+        print(f"[JARVIS Gateway] Deep Response generated for '{target}' ({len(cards)} findings).")
 
         graph_payload = None
         if request.include_graph:
@@ -296,7 +290,7 @@ INSTRUCTIONS:
         return {
             "query": request.query,
             "extracted_entities": [target],
-            "graph_paths": context,
+            "graph_paths": context_cards,
             "synthesis": synthesis_text,
             "graph": graph_payload,
             "sources": sources,
