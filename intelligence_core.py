@@ -3,6 +3,7 @@ import json
 from dotenv import load_dotenv
 from scraper_core import ScraperCore
 import asyncio
+from googlesearch import search
 
 # Load environment variables
 load_dotenv()
@@ -63,6 +64,45 @@ class IntelligenceCore:
             print(f"Graph store init error: {e}")
         self.scraper = ScraperCore()
 
+    async def web_search_and_scrape(self, query: str, num_results: int = 3) -> dict:
+        """
+        Phase 6: Live Web Research.
+        Performs a Google search and scrapes the top results.
+        """
+        print(f"[Intelligence Core] Live Search: Querying the web for '{query}'...")
+        try:
+            # Perform search to get URLs
+            urls = []
+            search_results = search(query, num_results=num_results)
+            for url in search_results:
+                urls.append(url)
+            
+            if not urls:
+                return {"cards": [], "text": ""}
+
+            # Reuse parallel scraping logic
+            print(f"[Intelligence Core] Live Scraper: Fetching {len(urls)} live articles...")
+            scraped_data = await self.scraper.scrape_batch(urls)
+
+            # Format for synthesis
+            live_cards = []
+            full_text_context = ""
+            for url, text in scraped_data.items():
+                title = text.split("\n")[0][:100] if text else "Live Intelligence Report"
+                domain = url.split("//")[-1].split("/")[0]
+                card = (
+                    f"TYPE: Live Article | SOURCE: {domain} | DATE: Real-time\n"
+                    f"URL: {url}\n"
+                    f"SUMMARY: {text[:500]}..."
+                )
+                live_cards.append(card)
+                full_text_context += f"SOURCE: {url}\nCONTENT:\n{text[:3000]}\n\n---\n\n"
+            
+            return {"cards": live_cards, "text": full_text_context}
+        except Exception as e:
+            print(f"[Intelligence Core] Live Search Error: {e}")
+            return {"cards": [], "text": ""}
+
     async def fetch_deep_context(self, target: str, hops: int = 3, max_articles: int = 3) -> str:
         """
         Orchestrates the Phase 5 Deep RAG pipeline.
@@ -81,10 +121,10 @@ class IntelligenceCore:
             try:
                 # Optimized query for deep URLs
                 query = f"""
-                MATCH (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|MEASURED_IN|THREATENS*1..{hops}]-(n)
+                MATCH (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|OPERATES_IN|MENTIONS*1..{hops}]-(n)
                 WHERE (e:Person OR e:Organization OR e:Location OR e:Theme)
                   AND toLower(e.name) CONTAINS toLower($target)
-                  AND (n:Article OR n:EconomicIndicator OR n:WeatherAlert)
+                  AND (n:Article OR n:StrategicReport)
                 RETURN DISTINCT n.url as url, n.title as title, labels(n)[0] as type
                 LIMIT {max_articles}
                 """
@@ -158,8 +198,8 @@ class IntelligenceCore:
                   AND toLower(e.name) CONTAINS toLower($target)
                 CALL {{
                     WITH e
-                    MATCH path = (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|MEASURED_IN|THREATENS*1..{hops}]-(n)
-                    WHERE (n:Article OR n:EconomicIndicator OR n:WeatherAlert)
+                    MATCH path = (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|OPERATES_IN|MENTIONS*1..{hops}]-(n)
+                    WHERE (n:Article OR n:StrategicReport)
                     RETURN DISTINCT n
                     LIMIT 25
                 }}

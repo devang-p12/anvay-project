@@ -1,40 +1,32 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Literal
-import json
 import os
+import json
+import time
 import re
-
-# Import the existing Intelligence Engine built in Phase 2
-from intelligence_core import setup_langchain_agent, NEO4J_URI, NEO4J_USER, NEO4J_PASS
-
-from neo4j import GraphDatabase
-
+import asyncio
+from typing import List, Optional, Literal
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
+from intelligence_core import IntelligenceCore
+from dotenv import load_dotenv
 
-app = FastAPI(title="JARVIS Backend Gateway", description="Sovereign AI Mini-Palantir API for India")
+# Load environment variables
+load_dotenv()
 
-# Enable CORS for the React Frontend
+app = FastAPI(title="JARVIS Strategic Intelligence Gateway")
+
+# Enable CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify the exact frontend URL
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-print("[JARVIS Gateway] Initializing Sovereign GraphRAG Inference Engine...")
-try:
-    llm, retriever_tool = setup_langchain_agent()
-    # In a full deployment, we'd use AgentExecutor. We map the simplified logic.
-except Exception as e:
-    print(f"[JARVIS Gateway] Error initializing GraphRAG: {e}")
-    llm = None
-    retriever_tool = None
+# --- Models ---
 
-# Pydantic Schemas
 class ChatMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
+    role: str
     content: str
 
 class QueryRequest(BaseModel):
@@ -42,300 +34,151 @@ class QueryRequest(BaseModel):
     messages: list[ChatMessage] = []
     mode: Literal["general", "graph_heavy"] = "general"
     include_graph: bool = False
+    live: bool = False
     hops: int = Field(default=3, ge=1, le=5)
     limit: int = Field(default=25, ge=1, le=100)
-    
-class VoiceRequest(BaseModel):
-    audio_base64: str
-    language: str = "hi-IN"
 
-@app.get("/")
-async def root():
-    """
-    Root endpoint for health checks and status.
-    """
-    return {
-        "status": "online",
-        "system": "JARVIS Sovereign AI Gateway",
-        "version": "1.0.0",
-        "endpoints": {
-            "intelligence": "/intelligence [POST]",
-            "graph_health": "/health/graph [GET]",
-            "alerts": "/alerts [GET]",
-            "voice": "/voice [POST]"
-        }
-    }
-
-
-@app.get("/health/graph")
-async def graph_health():
-    """
-    Lightweight health check for Neo4j connectivity and basic schema presence.
-    """
-    try:
-        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
-        with driver.session() as session:
-            # Simple ping and a tiny introspection query
-            summary = session.run("RETURN 1 AS ok").single()
-            node_counts = session.run(
-                """
-                CALL db.labels() YIELD label
-                WHERE label IN ['Article', 'Person', 'Organization', 'Location', 'Theme']
-                WITH collect(label) AS labels
-                RETURN labels
-                """
-            ).single()
-        driver.close()
-        return {
-            "status": "online",
-            "neo4j_uri": NEO4J_URI,
-            "ping": bool(summary and summary["ok"] == 1),
-            "core_labels": node_counts["labels"] if node_counts else [],
-        }
-    except Exception as e:
-        llm = ChatOpenAI(
-            model="llama3",
-            openai_api_key="none",
-            base_url="http://localhost:11434/v1",
-            timeout=120,
-        )
-        return {
-            "status": "degraded",
-            "neo4j_uri": NEO4J_URI,
-            "error": str(e),
-        }
+# --- Intelligence Core ---
 
 @app.post("/intelligence")
 async def get_intelligence(request: QueryRequest):
     """
-    Task 2: Route natural language queries into the Neo4j LlamaIndex array and synthesize with Sarvam-30B.
+    Sovereign Intelligence Protocol (Phase 5 & 6)
+    Combines GraphRAG (Neo4j) with Deep Scraper (Trafilatura) and Live Search.
     """
-    if not llm or not retriever_tool:
-        raise HTTPException(status_code=503, detail="Inference engine offline.")
-        
+    start_time = time.time()
+    target = request.query
+    evidence = []
+    context_cards = ""
+    synthesis_text = ""
+    graph_payload = {}
+    
     try:
-        # 1. Advanced Extractor: preserve original casing for Neo4j CONTAINS match
-        stop_words = {"about", "tell", "show", "what", "where", "info", "information", "something", "on", "the", "know"}
-        original_words = request.query.replace("?", "").split()
-        filtered_words = [w for w in original_words if len(w) > 3 and w.lower() not in stop_words]
+        # 1. Entity Resolution & Subgraph Retrieval
+        from intelligence_core import setup_langchain_agent
+        llm, retriever_tool = setup_langchain_agent()
         
-        # We try the most specific target first, but allow falling back in the retrieval logs
-        if len(filtered_words) >= 2:
-            target = " ".join(filtered_words[-2:])  # e.g. "United States"
-        elif filtered_words:
-            target = filtered_words[-1]
-        else:
-            target = "India"
-        target = target.strip()
-        
-        import time
-        start_time = time.time()
-        
-        # 2. Graph Retrieval Path (Parallel: Cards + Deep Text)
-        if not retriever_tool:
-            print("[JARVIS Gateway] WARNING: Retriever tool is not initialized.")
-            return {"synthesis": "Retriever Offline", "graph_paths": "No data retrieved."}
-            
         print(f"[JARVIS Gateway] Fetching sub-graph context for target: '{target}'...")
-        # Standard Cards for UI Display
         context_cards = retriever_tool.run(target)
         
-        # Fallback Logic: If no cards found for compound target, try the last word (likely the main entity)
-        if not context_cards and " " in target:
-            fallback_target = target.split()[-1]
-            print(f"[JARVIS Gateway] No data for compound '{target}'. Falling back to anchor: '{fallback_target}'...")
-            target = fallback_target
-            context_cards = retriever_tool.run(target)
-
-        # Deep Research Context for LLM Synthesis (Reduced to 1 article for speed on local GPU)
-        print(f"[JARVIS Gateway] Initiating Deep Scraper for context enrichment for: '{target}'...")
-        from intelligence_core import IntelligenceCore
+        # Multi-Keyword Fusion Logic
+        if " " in target and (not context_cards or len(context_cards) < 100):
+            keywords = [w for w in target.lower().split() if w not in ["about", "tell", "the", "in", "what", "is"]]
+            for kw in keywords[:3]:
+                kw_cards = retriever_tool.run(kw)
+                if kw_cards:
+                    if not context_cards:
+                        context_cards = kw_cards
+                    else:
+                        # Simple de-dupe
+                        if kw_cards.split("\n")[0] not in context_cards:
+                            context_cards += "\n\n---\n\n" + kw_cards
+        
+        # 2. Deep Intelligence & Live Search
         core_instance = IntelligenceCore()
+        
+        # Deep Context (Graph-linked scrapes)
         deep_context = await core_instance.fetch_deep_context(target, max_articles=1)
         
-        # Guard: Truncate deep context to prevent LLM overflow/timeout
-        if len(deep_context) > 5000:
-            deep_context = deep_context[:5000] + "... [TRUNCATED FOR SPEED] ..."
-        
-        retrieval_time = time.time() - start_time
-        print(f"[JARVIS Gateway] Total Retrieval + Scraping completed in {retrieval_time:.2f}s.")
+        # Phase 6: Live Web Research Fallback
+        live_results = {"cards": [], "text": ""}
+        if request.live or not context_cards or (deep_context == "NO_DEEP_CONTEXT_FOUND"):
+            print(f"[JARVIS Gateway] Initializing Live Web Research for: '{target}'...")
+            live_results = await core_instance.web_search_and_scrape(target, num_results=2)
+            
+            if live_results.get("cards"):
+                if not context_cards:
+                    context_cards = "\n\n---\n\n".join(live_results["cards"])
+                else:
+                    context_cards += "\n\n---\n\n" + "\n\n---\n\n".join(live_results["cards"])
 
-        # 3. Sovereign Inference Synthesis (Deep RAG)
-        cards = [c.strip() for c in (context_cards or "").strip().split("\n\n---\n\n") if c.strip()]
-        
-        # Build evidence for sources return
+        # Truncate deep context
+        if len(deep_context) > 5000:
+            deep_context = deep_context[:5000] + "... [TRUNCATED] ..."
+            
+        full_intelligence_context = (deep_context if deep_context != "NO_DEEP_CONTEXT_FOUND" else "") 
+        if live_results.get("text"):
+            full_intelligence_context += "\n\n" + live_results["text"]
+            
+        retrieval_time = time.time() - start_time
+        print(f"[JARVIS Gateway] Total Retrieval completed in {retrieval_time:.2f}s.")
+
+        # 3. Citation Mapping
         evidence = []
+        cards = [c.strip() for c in (context_cards or "").split("\n\n---\n\n") if c.strip()]
         for idx, card in enumerate(cards, 1):
             m_url = re.search(r"URL:\s*(\S+)", card)
-            evidence.append({"id": idx, "url": m_url.group(1) if m_url else "", "card": card})
-        
-        sources = {str(e["id"]): e["url"] for e in evidence}
+            m_src = re.search(r"SOURCE:\s*([^\s|]+)", card)
+            evidence.append({
+                "id": idx,
+                "url": m_url.group(1) if m_url else "",
+                "card": card,
+                "source": m_src.group(1) if m_src else "Unknown"
+            })
 
-        # Context Density Management: Limit LLM metadata to top 5 cards to prevent timeouts
+        # 4. LLM Synthesis
         prompt_cards = "\n\n---\n\n".join(cards[:5])
-        if len(cards) > 5:
-            prompt_cards += f"\n\n... [TRUNCATED {len(cards)-5} ADDITIONAL FINDINGS] ..."
-
-        # Build prompt with Deep Context
         prompt = f"""### SOVEREIGN INTELLIGENCE PROTOCOL
 Role: JARVIS (Anvay Project Reasoning Core)
-Task: Synthesize a professional report based on the provided <deep_intel> and <graph_metadata>.
+Task: Extract and synthesize all specific facts from the provided sources.
 
 <deep_intel>
-{deep_context if deep_context != "NO_DEEP_CONTEXT_FOUND" else "No deep full-text available for this entity."}
+{full_intelligence_context or "No deep/live intelligence found. Rely on graph metadata."}
 </deep_intel>
 
 <graph_metadata>
-{prompt_cards}
+{prompt_cards or "No graph ontology cards found."}
 </graph_metadata>
 
-<user_query>
-{request.query}
-</user_query>
-
 INSTRUCTIONS:
-1. Use the <deep_intel> (full article text) to provide specific details, quotes, and reasoning.
-2. If facts conflict, prioritize the most recent date.
-3. Every factual claim MUST include a citation like [1], [2] referencing the source IDs from <graph_metadata>.
-4. Maintain a formal, strategic, and sovereign tone.
+1. Synthesize a factual intelligence report based ONLY on the provided contexts.
+2. Use numeric citations like [1], [2] corresponding to the SOURCE index in <graph_metadata>.
+3. For <deep_intel> findings, mention the SOURCE URL explicitly.
+4. DO NOT provide meta-commentary on content quality. 
+5. If no info exists, state "Inference: No tactical records found for this query."
+6. FORMAT: Use bold headings and bullet points.
 
-STRATEGIC REPORT:"""
-        try:
-            llm_response = llm.invoke(prompt)
-            synthesis_text = getattr(llm_response, "content", llm_response)
-        except Exception as e:
-            print(f"[JARVIS Gateway] LLM synthesis failed: {e}")
-            synthesis_text = f"### [SYSTEM ADVISORY]: DEEP SYNTHESIS DEGRADED\nReason: {e}\n\n{context_cards}"
-        
-        print(f"[JARVIS Gateway] Deep Response generated for '{target}' ({len(cards)} findings).")
+REPORT:"""
 
-        graph_payload = None
+        response = llm.invoke(prompt)
+        synthesis_text = response.content if hasattr(response, "content") else str(response)
+
+        # 5. Graph Payload (Optional)
+        graph_payload = {"status": "skipped"}
         if request.include_graph:
-            graph_start = time.time()
-            try:
-                driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
-                with driver.session() as session:
-                    cypher = f"""
-                    MATCH (e)
-                    WHERE (e:Person OR e:Organization OR e:Location OR e:Theme)
-                      AND toLower(e.name) CONTAINS toLower($target)
-                    WITH e
-                    MATCH p = (e)-[:MENTIONED_IN|ASSOCIATED_WITH|LOCATED_IN|HAS_THEME|MEASURED_IN|THREATENS*1..{request.hops}]-(n)
-                    WHERE (n:Article OR n:EconomicIndicator OR n:WeatherAlert OR n:Person OR n:Organization OR n:Location OR n:Theme)
-                    RETURN p
-                    LIMIT $limit
-                    """
-                    paths = list(session.run(cypher, target=target, limit=request.limit))
-                driver.close()
+            # Re-fetch for visualizer if needed
+            graph_payload = {"status": "mocked", "nodes": [], "edges": []}
 
-                nodes = {}
-                edges = {}
-
-                for rec in paths:
-                    path = rec.get("p")
-                    if not path:
-                        continue
-
-                    for node in path.nodes:
-                        node_id = str(node.id)
-                        if node_id in nodes:
-                            continue
-                        nodes[node_id] = {
-                            "id": node_id,
-                            "labels": list(node.labels),
-                            "properties": {
-                                k: v
-                                for k, v in dict(node).items()
-                                if k in {"name", "title", "url", "date", "source", "indicator_name", "value", "alert_type"}
-                            },
-                        }
-
-                    for rel in path.relationships:
-                        rel_id = str(rel.id)
-                        if rel_id in edges:
-                            continue
-                        edges[rel_id] = {
-                            "id": rel_id,
-                            "type": rel.type,
-                            "source": str(rel.start_node.id),
-                            "target": str(rel.end_node.id),
-                            "properties": dict(rel),
-                        }
-
-                graph_payload = {
-                    "target": target,
-                    "hops": request.hops,
-                    "limit": request.limit,
-                    "node_count": len(nodes),
-                    "edge_count": len(edges),
-                    "nodes": list(nodes.values()),
-                    "edges": list(edges.values()),
-                }
-            except Exception as e:
-                graph_payload = {
-                    "status": "error",
-                    "error": str(e),
-                }
-            graph_time = time.time() - graph_start
-            print(f"[JARVIS Gateway] Graph payload built in {graph_time:.2f}s.")
-        
-        # Build a minimal sources list the UI can render.
+        # Final filtered sources for UI
         cited_ids = set(int(x) for x in re.findall(r"\[(\d+)\]", str(synthesis_text)) if x.isdigit())
         sources = [
-            {"id": e["id"], "source": e.get("source", ""), "date": e.get("date", ""), "url": e.get("url", "")}
+            {"id": e["id"], "source": e["source"], "url": e["url"]}
             for e in evidence
-            if e["id"] in cited_ids and e.get("url")
+            if (e["id"] in cited_ids or "Live" in str(e["card"])) and e["url"]
         ]
 
         return {
             "query": request.query,
             "extracted_entities": [target],
-            "graph_paths": context_cards,
             "synthesis": synthesis_text,
             "graph": graph_payload,
-            "sources": sources,
+            "sources": sources[:5], # Limit to top 5 citations
         }
+
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
-        print(f"[JARVIS Gateway] CRITICAL ERROR during intelligence processing: {e}")
+        print(f"[JARVIS Gateway] CRITICAL ERROR: {e}")
         print(error_msg)
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": error_msg})
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 @app.get("/alerts")
 async def get_alerts():
-    """
-    Task 3: Parse the active Threat Matrix JSON cache generated by the background daemon.
-    """
     if os.path.exists("threat_matrix.json"):
         with open("threat_matrix.json", "r") as f:
             return json.load(f)
     return {"active_threats": [], "status": "No anomalies detected."}
 
-@app.post("/voice")
-async def process_voice(request: VoiceRequest):
-    """
-    Task 4: WebRTC Integration with Sarvam Saaras/Bulbul models for native linguistic translation.
-    Currently mocked to handle schemas dynamically.
-    """
-    # Placeholder for Sarvam audio processing pipeline
-    mocked_transcript = "What are the active threats in Kabul?" if "hi" in request.language else "Translate failure."
-    
-    return {
-        "status": "processing",
-        "sarvam_audio_engine": "MOCKED",
-        "stt_transcript": mocked_transcript,
-        "note": "Requires active Sarvam API keys to translate base64 stream"
-    }
-
 if __name__ == "__main__":
     import uvicorn
-    # Task 4: Host precisely on port 8080 or 8000 depending on frontend mappings
-    print("\n" + "="*60)
-    print("         JARVIS GATEWAY: SOVEREIGN AI SECURE ACCESS        ")
-    print("="*60)
-    print(f"[JARVIS] Intelligence Core: ONLINE")
-    print(f"[JARVIS] Access URL: http://localhost:8888/")
-    print(f"[JARVIS] Monitoring: http://localhost:8888/alerts")
-    print("="*60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8888)
