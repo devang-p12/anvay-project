@@ -2,8 +2,7 @@ import os
 import json
 from dotenv import load_dotenv
 from scraper_core import ScraperCore
-import asyncio
-from googlesearch import search
+from duckduckgo_search import DDGS
 
 # Load environment variables
 load_dotenv()
@@ -71,12 +70,36 @@ class IntelligenceCore:
         """
         print(f"[Intelligence Core] Live Search: Querying the web for '{query}'...")
         try:
-            # Perform search to get URLs
-            urls = []
-            search_results = search(query, num_results=num_results)
-            for url in search_results:
-                urls.append(url)
-            
+            # Phase 6.1: Direct URL Detection
+            if query.startswith("http://") or query.startswith("https://"):
+                print(f"[Intelligence Core] Direct URL detected: {query}")
+                urls = [query]
+            else:
+                # Perform DuckDuckGo dual-stream search (Text + News)
+                urls = []
+                # Use a real browser user agent to avoid being blocked
+                with DDGS() as ddgs:
+                    # Stream 1: Text Results
+                    try:
+                        print(f"[Intelligence Core] DDGS Stream 1 (Text) for: {query}")
+                        t_results = list(ddgs.text(query, max_results=num_results))
+                        for r in t_results:
+                            urls.append(r["href"])
+                    except Exception as e:
+                        print(f"[Intelligence Core] DDGS Text Error: {e}")
+                    
+                    # Stream 2: News Results
+                    try:
+                        print(f"[Intelligence Core] DDGS Stream 2 (News) for: {query}")
+                        n_results = list(ddgs.news(query, max_results=num_results))
+                        for r in n_results:
+                            urls.append(r["url"])
+                    except Exception as e:
+                        print(f"[Intelligence Core] DDGS News Error: {e}")
+                
+                # De-duplicate
+                urls = list(dict.fromkeys(urls))[:num_results+1]
+             
             if not urls:
                 return {"cards": [], "text": ""}
 

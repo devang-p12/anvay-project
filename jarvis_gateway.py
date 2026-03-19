@@ -46,8 +46,11 @@ async def get_intelligence(request: QueryRequest):
     Sovereign Intelligence Protocol (Phase 5 & 6)
     Combines GraphRAG (Neo4j) with Deep Scraper (Trafilatura) and Live Search.
     """
+    # Phase 7: Live-Search-First Architecture (Always True)
+    request.live = True
     start_time = time.time()
     target = request.query
+        
     evidence = []
     context_cards = ""
     synthesis_text = ""
@@ -117,18 +120,23 @@ async def get_intelligence(request: QueryRequest):
             })
 
         # 4. LLM Synthesis
-        prompt_cards = "\n\n---\n\n".join(cards[:5])
-        prompt = f"""### SOVEREIGN INTELLIGENCE PROTOCOL
+        # Prioritize live results by placing them at the top of the context
+        prompt_cards = "\n\n---\n\n".join(cards[:8]) # Increased density for live sources
+        prompt = f"""### SOVEREIGN INTELLIGENCE PROTOCOL (LIVE-SEARCH-FIRST)
 Role: JARVIS (Anvay Project Reasoning Core)
 Task: Extract and synthesize all specific facts from the provided sources.
 
-<deep_intel>
-{full_intelligence_context or "No deep/live intelligence found. Rely on graph metadata."}
-</deep_intel>
+<live_intelligence>
+{live_results.get("text") or "No live data found."}
+</live_intelligence>
 
-<graph_metadata>
+<graph_deep_context>
+{deep_context if deep_context != "NO_DEEP_CONTEXT_FOUND" else "No graph context found."}
+</graph_deep_context>
+
+<ontology_metadata>
 {prompt_cards or "No graph ontology cards found."}
-</graph_metadata>
+</ontology_metadata>
 
 INSTRUCTIONS:
 1. Synthesize a factual intelligence report based ONLY on the provided contexts.
@@ -171,6 +179,18 @@ REPORT:"""
         print(f"[JARVIS Gateway] CRITICAL ERROR: {e}")
         print(error_msg)
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+@app.post("/scrape")
+async def direct_scrape(target_url: str):
+    """
+    Diagnostic Endpoint: Returns the raw extracted text from a specific URL.
+    """
+    core = IntelligenceCore()
+    results = await core.scraper.scrape_batch([target_url])
+    text = results.get(target_url)
+    if not text:
+        raise HTTPException(status_code=404, detail="Content could not be extracted.")
+    return {"url": target_url, "length": len(text), "content": text}
 
 @app.get("/alerts")
 async def get_alerts():
