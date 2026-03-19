@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Radio, MessageSquare, Map as MapIcon, ChevronRight, Send, ExternalLink, Loader2 } from 'lucide-react';
+import { Radio, MessageSquare, Map as MapIcon, Send, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getAlerts, postIntelligence } from './api';
 import './index.css';
@@ -15,12 +15,12 @@ const ThreatMatrix = ({ alerts }) => (
   >
     <div className="panel-header">
       <div className="panel-title">Threat Matrix</div>
-      <Radio className="pulse" size={16} color="#ff9800" />
+      <Radio className="pulse" size={16} color="var(--warning)" />
     </div>
     <div style={{ padding: '15px', overflowY: 'auto', flex: 1 }}>
       <AnimatePresence mode="popLayout">
         {alerts.length === 0 ? (
-          <div style={{ opacity: 0.3, textAlign: 'center', marginTop: '40px', fontSize: '0.8rem' }}>Monitoring for anomalies...</div>
+          <div className="faint" style={{ textAlign: 'center', marginTop: '40px', fontSize: '0.85rem' }}>Monitoring for anomalies...</div>
         ) : (
           alerts.map((alert, i) => (
             <motion.div 
@@ -31,17 +31,18 @@ const ThreatMatrix = ({ alerts }) => (
               style={{ 
                 marginBottom: '15px', 
                 padding: '12px', 
-                background: alert.severity === 'CRITICAL' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)', 
-                borderLeft: `3px solid ${alert.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b'}`, 
-                borderRadius: '4px' 
+                background: alert.severity === 'CRITICAL' ? 'var(--danger-weak)' : 'var(--warning-weak)', 
+                borderLeft: `3px solid ${alert.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)'}`, 
+                borderRadius: '10px',
+                border: '1px solid var(--border)',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', marginBottom: '5px' }}>
-                <span style={{ color: alert.severity === 'CRITICAL' ? '#ef4444' : '#f59e0b', fontWeight: 'bold' }}>{alert.severity}</span>
-                <span style={{ opacity: 0.5 }}>{new Date(alert.timestamp * 1000).toLocaleTimeString()}</span>
+                <span style={{ color: alert.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)', fontWeight: 800, letterSpacing: '0.06em' }}>{alert.severity}</span>
+                <span className="faint">{new Date(alert.timestamp * 1000).toLocaleTimeString()}</span>
               </div>
               <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{alert.source_entity} &rarr; {alert.target_entity}</div>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '4px' }}>{alert.description}</div>
+              <div className="muted" style={{ fontSize: '0.8rem', marginTop: '4px' }}>{alert.description}</div>
             </motion.div>
           ))
         )}
@@ -59,12 +60,12 @@ const StratMap = () => (
   >
     <div className="panel-header">
       <div className="panel-title">Geospatial Intelligence</div>
-      <MapIcon size={16} color="#00e5ff" />
+      <MapIcon size={16} color="var(--primary)" />
     </div>
-    <div style={{ flex: 1, position: 'relative', background: '#0a0c10' }}>
+    <div style={{ flex: 1, position: 'relative', background: 'linear-gradient(180deg, #ffffff 0%, #f8fafc 100%)' }}>
        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' }}>
-          <div className="pulse" style={{ color: '#00e5ff', fontSize: '0.8rem', letterSpacing: '2px' }}>INITIALIZING SATELLITE LINK...</div>
-          <div style={{ fontSize: '0.65rem', opacity: 0.4, marginTop: '8px' }}>ACQUIRING GDELT COORDINATES</div>
+          <div className="pulse" style={{ color: 'var(--primary)', fontSize: '0.9rem', fontWeight: 700, letterSpacing: '0.10em' }}>INITIALIZING MAP…</div>
+          <div className="faint" style={{ fontSize: '0.75rem', marginTop: '8px' }}>Awaiting coordinates from ingested reports</div>
        </div>
     </div>
   </motion.div>
@@ -101,29 +102,24 @@ const JarvisTerminal = () => {
     <div className="glass-panel" style={{ gridRow: '2' }}>
       <div className="panel-header">
         <div className="panel-title">JARVIS Reasoning Hub</div>
-        <MessageSquare size={16} color="#00e5ff" />
+        <MessageSquare size={16} color="var(--primary)" />
       </div>
       <div style={{ flex: 1, padding: '20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
         <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '15px' }}>
             {messages.map((m, i) => (
               <div key={i} style={{ 
                 alignSelf: m.type === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '85%',
-                padding: '12px 16px',
-                borderRadius: '12px',
-                background: m.type === 'user' ? 'rgba(0, 229, 255, 0.1)' : 'rgba(255, 255, 255, 0.03)',
-                border: `1px solid ${m.type === 'user' ? 'rgba(0, 229, 255, 0.2)' : 'var(--glass-border)'}`,
-                fontSize: '0.9rem',
-                lineHeight: '1.5'
               }}>
-                <div style={{ color: m.type === 'user' ? '#00e5ff' : '#ff9800', fontSize: '0.7rem', fontWeight: 700, marginBottom: '4px', textTransform: 'uppercase' }}>
+                <div className={`message ${m.type === 'user' ? 'message-user' : ''}`}>
+                <div className={`message-label ${m.type === 'user' ? 'message-label-user' : 'message-label-bot'}`}>
                   {m.type === 'user' ? 'You' : 'JARVIS'}
                 </div>
                 <div className={m.type === 'bot' ? 'mono' : ''} style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                </div>
               </div>
             ))}
             {loading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#00e5ff', fontSize: '0.8rem' }}>
+              <div className="muted" style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
                 <Loader2 size={16} className="animate-spin" />
                 <span>Reasoning over graph...</span>
               </div>
@@ -136,13 +132,14 @@ const JarvisTerminal = () => {
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSend()}
               placeholder="Query the Intelligence Graph..." 
-              style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)', padding: '12px 45px 12px 15px', borderRadius: '8px', color: 'white', outline: 'none' }}
+              className="input"
            />
            <div 
               onClick={handleSend}
-              style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: input.trim() ? 1 : 0.3 }}
+              className="btn-icon"
+              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', opacity: input.trim() ? 1 : 0.4 }}
            >
-              <Send size={18} color="#ff9800" />
+              <Send size={18} color="var(--primary)" />
            </div>
         </div>
       </div>
@@ -179,25 +176,25 @@ function App() {
         <div className="logo-section">
           <div className="logo-icon">A</div>
           <div>
-            <div style={{ fontWeight: 700, letterSpacing: '2px', fontSize: '1.1rem' }}>ANVAY AI</div>
-            <div style={{ fontSize: '0.65rem', color: '#ff9800', fontWeight: 600 }}>SOVEREIGN INTELLIGENCE CORP</div>
+            <div style={{ fontWeight: 800, letterSpacing: '0.08em', fontSize: '1.05rem' }}>ANVAY AI</div>
+            <div className="muted" style={{ fontSize: '0.8rem', fontWeight: 600 }}>Ontology Intelligence Engine</div>
           </div>
         </div>
 
         <div className="nav-status">
-          <div className="status-item">
+          <div className="status-item chip">
              <div className="status-dot"></div>
              KAFKA VAULT: ACTIVE
           </div>
-          <div className="status-item">
+          <div className="status-item chip">
              <div className="status-dot"></div>
              NEO4J: SYNCED
           </div>
-          <div className="status-item">
+          <div className="status-item chip">
              <div className="status-dot"></div>
              LLM: OPTIMIZED
           </div>
-          <div className="status-item" style={{ borderLeft: '1px solid var(--glass-border)', paddingLeft: '20px', marginLeft: '10px' }}>
+          <div className="status-item chip">
              <span className="mono">{time}</span>
           </div>
         </div>

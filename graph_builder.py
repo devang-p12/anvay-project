@@ -8,9 +8,18 @@ from tqdm import tqdm
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+if not NEO4J_USERNAME or not NEO4J_PASSWORD:
+    raise RuntimeError(
+        "NEO4J_USERNAME and NEO4J_PASSWORD must be set in the environment; "
+        "do not hardcode database credentials in source code."
+    )
 DATA_FILE = "data/ingested_data.json"
+
+if "neo4j:7687" in NEO4J_URI:
+    NEO4J_URI = NEO4J_URI.replace("neo4j:7687", "localhost:7687")
 
 class GraphBuilder:
     def __init__(self):
@@ -28,7 +37,10 @@ class GraphBuilder:
                 "CREATE CONSTRAINT person_name IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS UNIQUE",
                 "CREATE CONSTRAINT org_name IF NOT EXISTS FOR (o:Organization) REQUIRE o.name IS UNIQUE",
                 "CREATE CONSTRAINT loc_name IF NOT EXISTS FOR (l:Location) REQUIRE l.name IS UNIQUE",
-                "CREATE CONSTRAINT theme_name IF NOT EXISTS FOR (t:Theme) REQUIRE t.name IS UNIQUE"
+                "CREATE CONSTRAINT theme_name IF NOT EXISTS FOR (t:Theme) REQUIRE t.name IS UNIQUE",
+                # New source types
+                "CREATE CONSTRAINT economic_id IF NOT EXISTS FOR (e:EconomicIndicator) REQUIRE e.record_id IS UNIQUE",
+                "CREATE CONSTRAINT weather_id IF NOT EXISTS FOR (w:WeatherAlert) REQUIRE w.record_id IS UNIQUE",
             ]
             for query in constraints:
                 try:
@@ -49,7 +61,13 @@ class GraphBuilder:
         
         with self.driver.session() as session:
             for record in tqdm(records):
-                self._process_record(session, record)
+                source = record.get("source", "GDELT")
+                if source in ("WorldBank", "NDAP"):
+                    self._process_economic_indicator(session, record)
+                elif source == "IMD":
+                    self._process_weather_alert(session, record)
+                else:
+                    self._process_record(session, record)  # GDELT, PIB, default
         
         print("Graph construction complete.")
 
@@ -61,7 +79,7 @@ class GraphBuilder:
             title = f"Report from {record.get('source_name', 'Unknown Source')}"
 
         cypher_article = """
-        MERGE (a:Article {url: $url})
+        MERGE (a:Article:StrategicReport {url: $url})
         SET a.title = $title,
             a.name = $title,
             a.date = $date,
@@ -149,6 +167,65 @@ class GraphBuilder:
             ON MATCH SET r.weight = r.weight + 1
             """
             session.run(cypher_assoc, persons=list(set(clean_persons)), orgs=list(set(clean_orgs)))
+
+    def _process_economic_indicator(self, session, record):
+        """Creates an EconomicIndicator node from World Bank / NDAP data."""
+        session.run("""
+        MERGE (e:EconomicIndicator {record_id: $record_id})
+        SET e.title = $title,
+            e.date = $date,
+            e.indicator_name = $indicator_name,
+            e.value = $value,
+            e.url = $url,
+            e.source = $source,
+            e.ingestion_timestamp = $timestamp
+        """,
+        record_id=record["record_id"], title=record.get("title"),
+        date=record.get("date"), indicator_name=record.get("indicator_name", ""),
+        value=str(record.get("value", "")), url=record.get("url"),
+        source=record.get("source"), timestamp=record.get("ingestion_timestamp"))
+
+        # Link to countries/locations
+        for loc in set(filter(None, record.get("locations", []))):
+            session.run("""
+            MERGE (l:Location {name: $name})
+            MATCH (e:EconomicIndicator {record_id: $record_id})
+            MERGE (e)-[:MEASURED_IN]->(l)
+            """, name=loc, record_id=record["record_id"])
+
+        for theme in set(filter(None, record.get("themes", []))):
+            session.run("""
+            MERGE (t:Theme {name: $name})
+            MATCH (e:EconomicIndicator {record_id: $record_id})
+            MERGE (e)-[:HAS_THEME]->(t)
+            """, name=theme, record_id=record["record_id"])
+
+    def _process_weather_alert(self, session, record):
+        """Creates a WeatherAlert node from IMD data."""
+        session.run("""
+        MERGE (w:WeatherAlert {record_id: $record_id})
+        SET w.title = $title,
+            w.date = $date,
+            w.alert_type = $alert_type,
+            w.alert_text = $alert_text,
+            w.url = $url,
+            w.source = 'IMD',
+            w.ingestion_timestamp = $timestamp
+        """,
+        record_id=record["record_id"], title=record.get("title"),
+        date=record.get("date"), alert_type=record.get("alert_type", "Weather Alert"),
+        alert_text=record.get("alert_text", "")[:500], url=record.get("url"),
+        timestamp=record.get("ingestion_timestamp"))
+
+        # Link regions affected
+        for loc in set(filter(None, record.get("locations", []))):
+            if not loc: continue
+            session.run("""
+            MERGE (l:Location {name: $name})
+            MATCH (w:WeatherAlert {record_id: $record_id})
+            MERGE (w)-[:THREATENS]->(l)
+            """, name=loc, record_id=record["record_id"])
+
 
 if __name__ == "__main__":
     builder = GraphBuilder()
